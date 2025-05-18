@@ -1,0 +1,7 @@
+pandas
+duckdb
+lxml
+beautifulsoup4
+requests
+tqdm
+python-dotenv
