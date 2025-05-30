@@ -5,3 +5,12 @@ beautifulsoup4
 requests
 tqdm
 python-dotenv
+numpy
+scikit-learn
+lightgbm
+sentence-transformers
+joblib
+fastapi
+uvicorn
+sentence-transformers
+python-telegram-bot
