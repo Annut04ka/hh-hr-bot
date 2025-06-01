@@ -1,4 +1,5 @@
 import duckdb
+import pandas as pd
 
 # Подключение к базе (укажи свой путь, если другой)
 con = duckdb.connect('/content/drive/MyDrive/hh-hr-bot/data/hh.duckdb_3000')
@@ -217,3 +218,52 @@ def top_vacancies(area_name=None, keyword=None, grade=None, limit=5):
     params.append(limit)
 
     return con.execute(query, params).fetchdf()
+
+
+def promotion_skills(title=None, area_id=None, grade_from=None, grade_to=None, top_n=7):
+    """
+    Возвращает топ-навыки, которые чаще встречаются у grade_to, чем у grade_from,
+    то есть навыки для карьерного роста.
+    """
+    if grade_from is None or grade_to is None:
+        return []
+
+    grade_map = {'junior': 0, 'middle': 1, 'senior': 2, 'lead': 3}
+    grades = {v: k for k, v in grade_map.items()}
+    from_grade = grades.get(grade_from, grade_from)
+    to_grade = grades.get(grade_to, grade_to)
+
+    query = """
+    SELECT vs.skill_name, COUNT(*) as freq
+    FROM vacancy_skill vs
+    JOIN vacancy v ON vs.vacancy_id = v.id
+    WHERE 1=1
+    """
+    params = []
+    if title:
+        query += " AND LOWER(v.title) LIKE ?"
+        params.append(f"%{title.lower()}%")
+    if area_id:
+        query += " AND v.area_id = ?"
+        params.append(area_id)
+
+    query_from = query + " AND v.experience_hh = ? GROUP BY vs.skill_name"
+    params_from = params + [from_grade]
+    df_from = con.execute(query_from, params_from).fetchdf()
+
+    query_to = query + " AND v.experience_hh = ? GROUP BY vs.skill_name"
+    params_to = params + [to_grade]
+    df_to = con.execute(query_to, params_to).fetchdf()
+
+    skills_from = df_from.set_index('skill_name')['freq'] if not df_from.empty else pd.Series(dtype=int)
+    skills_to = df_to.set_index('skill_name')['freq'] if not df_to.empty else pd.Series(dtype=int)
+
+    skill_delta = []
+    for skill in skills_to.index:
+        freq_to = skills_to[skill]
+        freq_from = skills_from[skill] if skill in skills_from else 0
+        diff = freq_to - freq_from
+        if diff > 0:
+            skill_delta.append((skill, diff, freq_to))
+    skill_delta.sort(key=lambda x: (-x[1], -x[2]))
+    return skill_delta[:top_n]

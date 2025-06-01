@@ -2,7 +2,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes,MessageHandler, filters, ConversationHandler
 from model_inference import predict_salary, predict_salary_response, predict_grade
 from telegram.constants import ParseMode
-from market_analytics import top_5_skills, compare_vacancy_to_market, top_vacancies, get_area_id_by_city
+from market_analytics import top_5_skills, compare_vacancy_to_market, top_vacancies, get_area_id_by_city, promotion_skills
 import pandas as pd
 
 
@@ -36,6 +36,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/grade — определение грейда\n"
         "/skills — топ-5 востребованных навыков\n"
         "/analyze — сравнить вакансию с рынком\n"
+        "/nextskills — Навыки для карьерного роста\n"
         "/top — ТОП вакансий с рынком\n"
         "\nДля справки введите /help"
     )
@@ -81,7 +82,7 @@ async def salary_finish(update, context):
     grade = context.user_data['grade']
 
     # Найти area_id по названию города (твоя таблица area)
-    
+
     area_id = get_area_id_by_city(city) or 0
 
 
@@ -220,6 +221,58 @@ async def skills_finish(update, context):
     await update.message.reply_text(MAIN_MENU_TEXT)
     return ConversationHandler.END
 
+NEXTSKILLS_TITLE, NEXTSKILLS_CITY, NEXTSKILLS_FROM, NEXTSKILLS_TO = range(4)
+
+async def nextskills_start(update, context):
+    await update.message.reply_text(
+        "Для какой профессии вы хотите узнать навыки для карьерного роста? (например: Python-разработчик)"
+    )
+    return NEXTSKILLS_TITLE
+
+async def nextskills_get_city(update, context):
+    context.user_data['title'] = update.message.text.strip()
+    await update.message.reply_text("Укажите город или регион (или ‘-’ если не важно):")
+    return NEXTSKILLS_CITY
+
+async def nextskills_get_from(update, context):
+    context.user_data['city'] = update.message.text.strip()
+    await update.message.reply_text(
+        "С какого грейда хотите начать (junior, middle, senior)?"
+    )
+    return NEXTSKILLS_FROM
+
+async def nextskills_get_to(update, context):
+    context.user_data['grade_from'] = update.message.text.strip().lower()
+    await update.message.reply_text(
+        "На какой грейд хотите перейти (middle, senior, lead)?"
+    )
+    return NEXTSKILLS_TO
+
+async def nextskills_finish(update, context):
+    grade_to = update.message.text.strip().lower()
+    title = context.user_data['title']
+    city = context.user_data['city']
+    grade_from = context.user_data['grade_from']
+
+    # Получить area_id
+    area_id = get_area_id_by_city(city) if city and city != '-' else None
+
+    # Аналитика
+    result = promotion_skills(title=title, area_id=area_id, grade_from=grade_from, grade_to=grade_to, top_n=7)
+    if not result:
+        await update.message.reply_text("Нет данных для выбранных параметров или мало вакансий для анализа.")
+    else:
+        msg = (
+            f"Для перехода с <b>{grade_from}</b> на <b>{grade_to}</b> по профессии <b>{title}</b> "
+            f"на рынке чаще всего выделяют навыки:\n"
+        )
+        for i, (skill, delta, freq) in enumerate(result, 1):
+            msg += f"{i}. <b>{skill}</b> (+{delta} вакансий, всего {freq})\n"
+        await update.message.reply_text(msg, parse_mode="HTML")
+
+    await update.message.reply_text(MAIN_MENU_TEXT)
+    return ConversationHandler.END
+
 async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Введите параметры через запятую в формате:\n"
@@ -295,13 +348,13 @@ async def handle_topjobs_input(update: Update, context: ContextTypes.DEFAULT_TYP
         return ConversationHandler.END
     except Exception as e:
         await update.message.reply_text(f"Ошибка: {str(e)}")
-        return TOPJOBS_INPUT   
+        return TOPJOBS_INPUT
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Напиши /salary, /grade, /skills или /analyze для получения аналитики по рынку труда.")
 
 def main():
-    
+
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
     conv_salary = ConversationHandler(
@@ -324,7 +377,7 @@ def main():
         },
             fallbacks=[CommandHandler("cancel", lambda update, context: update.message.reply_text("Операция отменена."))]
     )
-       
+
     conv_topjobs = ConversationHandler(
         entry_points=[CommandHandler("top", topjobs_command)],
         states={
@@ -340,14 +393,26 @@ def main():
         fallbacks=[CommandHandler("cancel", lambda update, context: update.message.reply_text("Операция отменена."))]
     )
 
+    # Добавить handler:
+    conv_nextskills = ConversationHandler(
+        entry_points=[CommandHandler("nextskills", nextskills_start)],
+        states={
+            NEXTSKILLS_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, nextskills_get_city)],
+            NEXTSKILLS_CITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, nextskills_get_from)],
+            NEXTSKILLS_FROM: [MessageHandler(filters.TEXT & ~filters.COMMAND, nextskills_get_to)],
+            NEXTSKILLS_TO: [MessageHandler(filters.TEXT & ~filters.COMMAND, nextskills_finish)],
+        },
+        fallbacks=[CommandHandler("cancel", lambda update, context: update.message.reply_text("Операция отменена."))]
+    )
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(conv_salary)
     app.add_handler(conv_skills)
     #app.add_handler(conv_analyze)
-    app.add_handler(conv_topjobs) 
-    app.add_handler(conv_grade) 
+    app.add_handler(conv_topjobs)
+    app.add_handler(conv_grade)
+    app.add_handler(conv_nextskills)
 
 
     print("Бот запущен!")
