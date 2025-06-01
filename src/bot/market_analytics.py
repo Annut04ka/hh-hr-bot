@@ -1,7 +1,7 @@
 import duckdb
 
 # Подключение к базе (укажи свой путь, если другой)
-con = duckdb.connect('/content/drive/MyDrive/hh-hr-bot/data/processed/hh.duckdb_3000')
+con = duckdb.connect('/content/drive/MyDrive/hh-hr-bot/data/hh.duckdb_3000')
 
 # Карта грейдов для удобной фильтрации по “человеческим” грейдам
 grade_map = {
@@ -149,3 +149,71 @@ def compare_vacancy_to_market(vac: dict):
         if missing:
             result += f"Рекомендуется добавить популярные навыки: {', '.join(missing)}\n"
     return result
+
+#получение города
+def get_area_id_by_city(city_name):
+    """
+    Возвращает area_id по названию города (или None, если не найдено).
+    Поиск регистронезависимый и по подстроке.
+    """
+    query = "SELECT area_id FROM cities WHERE LOWER(area_name) LIKE ? LIMIT 1"
+    result = con.execute(query, [f"%{city_name.lower()}%"]).fetchdf()
+    if not result.empty:
+        return int(result.iloc[0]['area_id'])
+    else:
+        return None
+
+def top_vacancies(area_name=None, keyword=None, grade=None, limit=5):
+    """
+    Возвращает топ-вакансий по зарплате с учётом фильтров.
+    area_name: (str) — название города или региона (например, 'Москва')
+    keyword: (str) — ключевое слово в названии вакансии (например, 'python')
+    grade: (int/str) — грейд (например, 1 или 'От 1 года до 3 лет')
+    limit: (int) — сколько вакансий показать
+    """
+    # Поиск area_id по названию региона
+    area_id = None
+    if area_name:
+        area_query = "SELECT id FROM area WHERE LOWER(name) LIKE ? LIMIT 1"
+        df_area = con.execute(area_query, [f"%{area_name.lower()}%"]).fetchdf()
+        if not df_area.empty:
+            area_id = int(df_area.iloc[0]['id'])
+        else:
+            area_id = None
+
+    # Фильтр по грейду
+    experience_hh = None
+    if grade is not None:
+        if isinstance(grade, int):
+            for k, v in grade_map.items():
+                if v == grade:
+                    experience_hh = k
+                    break
+        elif grade in grade_map:
+            experience_hh = grade
+        else:
+            experience_hh = grade  # Вдруг ввели текст напрямую
+
+    query = """
+    SELECT v.title, v.employer, v.area_id, v.experience_hh, vp.salary_rub
+    FROM vacancy v
+    JOIN vacancy_proc vp ON v.id = vp.id
+    WHERE vp.salary_rub IS NOT NULL
+    """
+    params = []
+    if area_id:
+        query += " AND v.area_id = ?"
+        params.append(area_id)
+    if keyword:
+        query += " AND LOWER(v.title) LIKE ?"
+        params.append(f"%{keyword.lower()}%")
+    if experience_hh:
+        query += " AND v.experience_hh = ?"
+        params.append(experience_hh)
+    query += """
+    ORDER BY vp.salary_rub DESC
+    LIMIT ?
+    """
+    params.append(limit)
+
+    return con.execute(query, params).fetchdf()
