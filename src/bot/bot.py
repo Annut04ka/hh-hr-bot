@@ -4,6 +4,8 @@ from model_inference import predict_salary, predict_salary_response, predict_gra
 from telegram.constants import ParseMode
 from market_analytics import top_5_skills, compare_vacancy_to_market, top_vacancies, get_area_id_by_city, promotion_skills
 import pandas as pd
+from dotenv import load_dotenv
+import os
 
 
 SALARY_INPUT = 1
@@ -26,12 +28,18 @@ MAIN_MENU_TEXT = (
     "/help — справка"
 )
 
-TELEGRAM_TOKEN = '7772058273:AAHb5uhZ8UsH-rHy_ORS7e34rBAyKpyoksk'
+# Загрузить переменные окружения из .env
+load_dotenv(dotenv_path="/content/drive/MyDrive/hh-hr-bot/.env")
+
+# Получить токен из переменных окружения
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Привет! Я HR-бот. Могу предсказать зарплату, грейд, показать топ навыков и сравнить вакансию с рынком.\n"
-        "Команды:\n"
+    # Отправляем картинку
+    await update.message.reply_photo(
+        photo=open('src/bot/baner.jpg', 'rb'),  # Укажи имя файла-баннера (jpg/png)
+        caption="👋 Добро пожаловать в HR-бот!\n\nМогу предсказать зарплату, грейд, показать топ навыков и сравнить вакансию с рынком.\n\n"
+        "📌Команды:\n"
         "/salary — прогноз зарплаты\n"
         "/grade — определение грейда\n"
         "/skills — топ-5 востребованных навыков\n"
@@ -40,6 +48,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/top — ТОП вакансий с рынком\n"
         "\nДля справки введите /help"
     )
+    #await update.message.reply_text(
+    #    "👋 Привет! Я HR-бот. Могу предсказать зарплату, грейд, показать топ навыков и сравнить вакансию с рынком.\n"
+    #    "Команды:\n"
+    #    "/salary — прогноз зарплаты\n"
+    #    "/grade — определение грейда\n"
+    ##    "/skills — топ-5 востребованных навыков\n"
+     #   "/analyze — сравнить вакансию с рынком\n"
+    #    "/nextskills — Навыки для карьерного роста\n"
+    ##    "/top — ТОП вакансий с рынком\n"
+     #   "\nДля справки введите /help"
+    #)
 
 # Состояния
 SALARY_DESC, SALARY_CITY, SALARY_SKILLS, SALARY_GRADE = range(4)
@@ -124,47 +143,68 @@ async def salary_finish(update, context):
     await update.message.reply_text(MAIN_MENU_TEXT)
     return ConversationHandler.END
 
-async def grade_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+GRADE_DESC, GRADE_CITY, GRADE_SKILLS = range(3)
+
+async def grade_start(update, context):
     await update.message.reply_text(
-        "Введите параметры вакансии через запятую в формате:\n"
-        "desc_len, desc_words, num_skills, description\n"
-        "Пример:\n"
-        "1200, 100, 4, Python-разработчик с опытом работы в команде, знание SQL и Django"
+        "Опишите вакансию или свой опыт работы (например: Python-разработчик, поддержка веб-сервиса, автоматизация бизнес-процессов):"
     )
-    return GRADE_INPUT
+    return GRADE_DESC
 
-async def handle_grade_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        text = update.message.text.strip()
-        parts = text.split(",", 3)  # Только первые 3 запятые разбивают на 4 части
+async def grade_get_city(update, context):
+    context.user_data['description'] = update.message.text.strip()
+    await update.message.reply_text("В каком городе или регионе расположена вакансия (или где вы работаете)?")
+    return GRADE_CITY
 
-        if len(parts) < 4:
-            await update.message.reply_text("Ошибка: введено слишком мало параметров. Проверьте формат.")
-            return GRADE_INPUT
+async def grade_get_skills(update, context):
+    context.user_data['city'] = update.message.text.strip()
+    await update.message.reply_text(
+        "Перечислите ключевые навыки через запятую (например: Python, Django, SQL, коммуникабельность):"
+    )
+    return GRADE_SKILLS
 
-        features = {
-            'desc_len': int(parts[0].strip()),
-            'desc_words': int(parts[1].strip()),
-            'num_skills': int(parts[2].strip()),
-            'description': parts[3].strip()
-        }
+async def grade_finish(update, context):
+    description = context.user_data['description']
+    city = context.user_data['city']
+    skills = [s.strip() for s in update.message.text.split(',')]
 
-        grade_code = predict_grade(features)
-        grade_map = {
-            0: "junior",
-            1: "middle",
-            2: "senior",
-            3: "lead"
-        }
-        grade_label = grade_map.get(grade_code, "unknown")
-        await update.message.reply_text(
-            f"Определённый грейд: <b>{grade_label.title()} ({grade_code})</b>",
-            parse_mode="HTML"
-        )
-        return ConversationHandler.END
-    except Exception as e:
-        await update.message.reply_text(f"Ошибка: {str(e)}")
-        return GRADE_INPUT
+    area_id = get_area_id_by_city(city) or 0
+    desc_len = len(description)
+    desc_words = len(description.split())
+    title = description[:40]
+    title_len = len(title)
+    num_skills = len(skills)
+
+    # exp_* признаки все по 0 — модель сама определяет грейд
+    features = {
+        'area_id': area_id,
+        'desc_len': desc_len,
+        'desc_words': desc_words,
+        'title_len': title_len,
+        'num_skills': num_skills,
+        'exp_junior': 0,
+        'exp_middle': 0,
+        'exp_senior': 0,
+        'exp_lead': 0,
+        'description': description,
+        'title': title,
+        'salary_currency': "RUR"
+    }
+
+    grade_code = predict_grade(features)
+    grade_map = {0: "junior", 1: "middle", 2: "senior", 3: "lead"}
+    grade_label = grade_map.get(grade_code, "unknown")
+
+    msg = (
+        f"<b>Определённый грейд:</b> <b>{grade_label.title()}</b> ({grade_code})\n\n"
+        f"Ваши данные:\n"
+        f"Город: {city} (area_id: {area_id})\n"
+        f"Навыки: {', '.join(skills)}\n"
+        f"Описание: {description[:40]}..."
+    )
+    await update.message.reply_text(msg, parse_mode="HTML")
+    await update.message.reply_text(MAIN_MENU_TEXT)
+    return ConversationHandler.END
 
 SKILLS_TITLE, SKILLS_CITY, SKILLS_GRADE = range(3)
 
@@ -273,85 +313,128 @@ async def nextskills_finish(update, context):
     await update.message.reply_text(MAIN_MENU_TEXT)
     return ConversationHandler.END
 
-async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+ANALYZE_DESC, ANALYZE_CITY, ANALYZE_SKILLS, ANALYZE_SALARY = range(4)
+
+async def analyze_start(update, context):
     await update.message.reply_text(
-        "Введите параметры через запятую в формате:\n"
-        "title, area_id, experience_hh, skills, salary_rub\n"
-        "Пример:\n"
-        "Python developer, 3, От 1 года до 3 лет, Python;SQL;Django;English, 120000\n"
-        "Если не хотите указывать зарплату — оставьте поле пустым (последний параметр)."
+        "Опишите вакансию или ваш опыт работы (например: Python-разработчик, поддержка веб-сервиса, автоматизация бизнес-процессов):"
     )
-    return ANALYZE_INPUT
+    return ANALYZE_DESC
 
-async def handle_analyze_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        text = update.message.text.strip()
-        parts = [p.strip() for p in text.split(",")]
+async def analyze_get_city(update, context):
+    context.user_data['description'] = update.message.text.strip()
+    await update.message.reply_text("В каком городе или регионе расположена вакансия (или где вы работаете)?")
+    return ANALYZE_CITY
 
-        if len(parts) < 4:
-            await update.message.reply_text("Ошибка: слишком мало параметров. Проверьте формат.")
-            return ANALYZE_INPUT
-
-        title = parts[0]
-        area_id = int(parts[1])
-        experience_hh = parts[2]
-        skills = parts[3]
-        salary_rub = int(parts[4]) if len(parts) > 4 and parts[4] else None
-
-        vacancy = {
-            'title': title,
-            'area_id': area_id,
-            'experience_hh': experience_hh,
-            'skills': skills,
-            'salary_rub': salary_rub
-        }
-        result = compare_vacancy_to_market(vacancy)
-        await update.message.reply_text(result)
-        return ConversationHandler.END
-    except Exception as e:
-        await update.message.reply_text(f"Ошибка: {str(e)}")
-        return ANALYZE_INPUT
-
-async def topjobs_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def analyze_get_skills(update, context):
+    context.user_data['city'] = update.message.text.strip()
     await update.message.reply_text(
-        "Введите параметры через пробел:\n"
-        "город ключевое_слово_в_названии грейд (например: Москва python 1)\n"
-        "Грейд: 0 — junior, 1 — middle, 2 — senior, 3 — lead.\n"
-        "Если хотите искать по всем грейдам — оставьте поле пустым."
+        "Перечислите ключевые навыки через запятую (например: Python, Django, SQL, коммуникабельность):"
     )
-    return TOPJOBS_INPUT
+    return ANALYZE_SKILLS
 
-async def handle_topjobs_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+#async def analyze_get_grade(update, context):
+#    context.user_data['skills'] = [s.strip() for s in update.message.text.split(',')]
+#    await update.message.reply_text(
+#        "Укажите уровень (junior, middle, senior, lead). Если не важен — напишите ‘-’ или оставьте пустым."
+#    )
+ #   return SKILLS_GRADE    
+
+async def analyze_get_salary(update, context):
+    context.user_data['skills'] = [s.strip() for s in update.message.text.split(',')]
+    await update.message.reply_text(
+        "Укажите вашу зарплату (если хотите сравнить с рынком). Если не хотите — напишите ‘-’ или оставьте пустым."
+    )
+    return ANALYZE_SALARY
+
+async def analyze_finish(update, context):
+    description = context.user_data['description']
+    city = context.user_data['city']
+    skills = context.user_data['skills']
+    salary_input = update.message.text.strip()
     try:
-        text = update.message.text.strip()
-        parts = text.split()
+        salary_rub = int(salary_input.replace(' ', '').replace('руб', '')) if salary_input and salary_input != '-' else None
+    except ValueError:
+        salary_rub = None
 
-        if len(parts) < 2:
-            await update.message.reply_text("Ошибка: укажите хотя бы город и ключевое слово.")
-            return TOPJOBS_INPUT
+    area_id = get_area_id_by_city(city) or 0
 
-        area_name = parts[0]
-        keyword = parts[1]
-        grade = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
+    vac = {
+        'title': description[:40],          # для title
+        'area_id': area_id,
+        'experience_hh': None,              # если хочешь — добавить шаг с опытом
+        'skills': skills,
+        'salary_rub': salary_rub
+    }
 
-        df = top_vacancies(area_name=area_name, keyword=keyword, grade=grade, limit=5)
-        if df.empty:
-            await update.message.reply_text("Вакансий не найдено по указанным фильтрам.")
-            return ConversationHandler.END
+    # Анализ
+    result = compare_vacancy_to_market(vac)
+    await update.message.reply_text(result)
+    await update.message.reply_text(MAIN_MENU_TEXT)
+    return ConversationHandler.END
 
-        msg = "Топ-5 вакансий:\n"
-        for i, row in df.iterrows():
-            msg += (f"{i+1}. {row['title']} ({row['employer']})\n"
-                    f"   Город: {area_name}, Грейд: {row['experience_hh']}\n"
-                    f"   Зарплата: {int(row['salary_rub'])} руб.\n")
-        await update.message.reply_text(msg)
+TOP_CITY, TOP_TITLE, TOP_GRADE = range(3)
+
+async def top_start(update, context):
+    await update.message.reply_text("В каком городе или регионе вас интересуют вакансии?")
+    return TOP_CITY
+
+async def top_get_title(update, context):
+    context.user_data['city'] = update.message.text.strip()
+    await update.message.reply_text(
+        "Введите ключевое слово или профессию (например: Python, маркетолог, менеджер по продажам):"
+    )
+    return TOP_TITLE
+
+async def top_get_grade(update, context):
+    context.user_data['title'] = update.message.text.strip()
+    await update.message.reply_text(
+        "Укажите уровень (junior, middle, senior, lead), если важно. Если не важно — напишите ‘-’ или оставьте пустым."
+    )
+    return TOP_GRADE
+
+async def top_finish(update, context):
+    city = context.user_data['city']
+    title = context.user_data['title']
+    grade_input = update.message.text.strip().lower()
+
+    area_id = get_area_id_by_city(city) or 0
+
+    grade_map = {'junior': 0, 'middle': 1, 'senior': 2, 'lead': 3}
+    grade = grade_map.get(grade_input, None) if grade_input and grade_input != '-' else None
+
+    # Получаем топ-вакансий (твоя функция должна возвращать DataFrame/список вакансий)
+    df = top_vacancies(area_name=city, keyword=title, grade=grade)
+
+    if df.empty:
+        await update.message.reply_text("Не найдено вакансий по заданным параметрам.")
+        await update.message.reply_text(MAIN_MENU_TEXT)
         return ConversationHandler.END
-    except Exception as e:
-        await update.message.reply_text(f"Ошибка: {str(e)}")
-        return TOPJOBS_INPUT
+
+    msg = f"<b>Топ-5 вакансий по вашему запросу:</b>\nГород: {city}\nПрофессия: {title}\n"
+    if grade_input and grade_input != '-':
+        msg += f"Грейд: {grade_input}\n"
+    msg += "\n"
+    for i, row in df.iterrows():
+        salary = f"{int(row['salary_rub']):,}".replace(',', ' ') if row['salary_rub'] else "-"
+        msg += (
+            f"{i+1}. <b>{row['title']}</b> ({row['employer']})\n"
+            f"Зарплата: {salary} руб.\n"
+            f"Город: {city}\n"
+            "— — —\n"
+        )
+    await update.message.reply_text(msg, parse_mode="HTML")
+    await update.message.reply_text(MAIN_MENU_TEXT)
+    return ConversationHandler.END
+
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Напиши /salary, /grade, /skills или /analyze для получения аналитики по рынку труда.")
+    await update.message.reply_text(
+        "Напиши /salary, /grade, /skills или /analyze для получения аналитики по рынку труда.\n"
+        "/salary — Команда позволяет быстро получить прогноз средней зарплаты по любой вакансии.\n" 
+        "Подходит и работодателям, и соискателям: можно оценить “адекватность” зарплаты для предложенной позиции на рынке.\n"
+        
+    )
 
 def main():
 
@@ -379,16 +462,21 @@ def main():
     )
 
     conv_topjobs = ConversationHandler(
-        entry_points=[CommandHandler("top", topjobs_command)],
+        entry_points=[CommandHandler("top", top_start)],
         states={
-            TOPJOBS_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_topjobs_input)],
+            TOP_CITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, top_get_title)],
+            TOP_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, top_get_grade)],
+            TOP_GRADE: [MessageHandler(filters.TEXT & ~filters.COMMAND, top_finish)],
         },
         fallbacks=[CommandHandler("cancel", lambda update, context: update.message.reply_text("Операция отменена."))]
     )
+
     conv_grade = ConversationHandler(
-        entry_points=[CommandHandler("grade", grade_command)],
+        entry_points=[CommandHandler("grade", grade_start)],
         states={
-            GRADE_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_grade_input)],
+            GRADE_DESC: [MessageHandler(filters.TEXT & ~filters.COMMAND, grade_get_city)],
+            GRADE_CITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, grade_get_skills)],
+            GRADE_SKILLS: [MessageHandler(filters.TEXT & ~filters.COMMAND, grade_finish)],
         },
         fallbacks=[CommandHandler("cancel", lambda update, context: update.message.reply_text("Операция отменена."))]
     )
@@ -404,12 +492,22 @@ def main():
         },
         fallbacks=[CommandHandler("cancel", lambda update, context: update.message.reply_text("Операция отменена."))]
     )
+    conv_analyze = ConversationHandler(
+        entry_points=[CommandHandler("analyze", analyze_start)],
+        states={
+            ANALYZE_DESC: [MessageHandler(filters.TEXT & ~filters.COMMAND, analyze_get_city)],
+            ANALYZE_CITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, analyze_get_skills)],
+            ANALYZE_SKILLS: [MessageHandler(filters.TEXT & ~filters.COMMAND, analyze_get_salary)],
+            ANALYZE_SALARY: [MessageHandler(filters.TEXT & ~filters.COMMAND, analyze_finish)],
+        },
+        fallbacks=[CommandHandler("cancel", lambda update, context: update.message.reply_text("Операция отменена."))]
+    )
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(conv_salary)
     app.add_handler(conv_skills)
-    #app.add_handler(conv_analyze)
+    app.add_handler(conv_analyze)
     app.add_handler(conv_topjobs)
     app.add_handler(conv_grade)
     app.add_handler(conv_nextskills)

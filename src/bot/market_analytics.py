@@ -173,14 +173,16 @@ def top_vacancies(area_name=None, keyword=None, grade=None, limit=5):
     limit: (int) — сколько вакансий показать
     """
     # Поиск area_id по названию региона
-    area_id = None
-    if area_name:
-        area_query = "SELECT id FROM area WHERE LOWER(name) LIKE ? LIMIT 1"
-        df_area = con.execute(area_query, [f"%{area_name.lower()}%"]).fetchdf()
-        if not df_area.empty:
-            area_id = int(df_area.iloc[0]['id'])
-        else:
-            area_id = None
+    #area_id = None
+    #if area_name:
+    #    area_query = "SELECT area_id FROM cities WHERE LOWER(name) LIKE ? LIMIT 1"
+    #    df_area = con.execute(area_query, [f"%{area_name.lower()}%"]).fetchdf()
+    #    if not df_area.empty:
+    #       area_id = int(df_area.iloc[0]['id'])
+    #    else:
+    #       area_id = None
+    #  
+    area_id = get_area_id_by_city(area_name) or 0        
 
     # Фильтр по грейду
     experience_hh = None
